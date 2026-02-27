@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP32-S3 LVGL UI Emulator</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-color: #1a1a1a;
+        --device-frame: #333;
+        --screen-bg: #000;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background-color: var(--bg-color);
+        font-family:
+          "Inter",
+          -apple-system,
+          sans-serif;
+        color: white;
+      }
+
+      .header {
+        margin-bottom: 2rem;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+        background: linear-gradient(90deg, #00bfff, #00ff00);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      /* Device Frame Styling */
+      .device-container {
+        position: relative;
+        padding: 40px 15px;
+        background: #222;
+        border-radius: 40px;
+        box-shadow:
+          0 25px 50px -12px rgba(0, 0, 0, 0.5),
+          inset 0 2px 4px rgba(255, 255, 255, 0.1);
+        border: 4px solid #444;
+      }
+
+      /* Screen (480x320) */
+      #screen {
+        width: 480px;
+        height: 320px;
+        background-color: #000;
+        border-radius: 4px;
+        position: relative;
+        overflow: hidden;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+        user-select: none;
+      }
+
+      /* UI Elements */
+      .lv-label {
+        position: absolute;
+        font-family: "Montserrat", sans-serif;
+        text-align: center;
+        width: 100%;
+        transition: color 0.3s ease;
+      }
+
+      #hello-label {
+        top: 20px;
+        font-size: 48px;
+        font-weight: bold;
+      }
+
+      #title-label {
+        top: 120px;
+        font-size: 32px;
+      }
+
+      #ok-icon {
+        top: 180px;
+        font-size: 48px;
+      }
+
+      #status-label {
+        top: 240px;
+        font-size: 14px;
+      }
+
+      #dev-info {
+        bottom: 20px;
+        font-size: 16px;
+      }
+
+      .lv-line {
+        position: absolute;
+        bottom: 60px;
+        left: 40px;
+        right: 40px;
+        height: 2px;
+        background-color: #444;
+        transition: background-color 0.3s ease;
+      }
+
+      /* Hardware Details */
+      .cam-lens {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 10px;
+        height: 10px;
+        background: #111;
+        border-radius: 50%;
+        box-shadow: inset 0 1px 3px rgba(255, 255, 255, 0.2);
+      }
+
+      .controls {
+        margin-top: 2rem;
+        display: flex;
+        gap: 1rem;
+      }
+
+      .info-card {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 1rem;
+        border-radius: 12px;
+        font-size: 0.9rem;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>ESP32-S3 UI Previewer</h1>
+      <p>화면을 클릭하면 테마가 전환됩니다 (LV_EVENT_CLICKED)</p>
+    </div>
+
+    <div class="device-container">
+      <div class="cam-lens"></div>
+      <div id="screen">
+        <div id="hello-label" class="lv-label">HELLO WORLD!</div>
+        <div id="title-label" class="lv-label">ESP32-S3 SYSTEM</div>
+        <div id="ok-icon" class="lv-label">✔</div>
+        <div id="status-label" class="lv-label">
+          Hardware Driver Initialized Successful
+        </div>
+        <div class="lv-line" id="line"></div>
+        <div id="dev-info" class="lv-label">
+          Date: 2026-02-08 | Developer: Jinho Jung
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="info-card">
+        <strong>Resolution:</strong> 480 x 320 (Landscape)<br />
+        <strong>Display:</strong> IPS Capacitive Touch
+      </div>
+      <div class="info-card">
+        <strong>Current Mode:</strong> <span id="mode-text">DARK</span><br />
+        <strong>Target:</strong> ESP32-S3-WROOM
+      </div>
+    </div>
+
+    <script>
+      const screen = document.getElementById("screen");
+      const modeText = document.getElementById("mode-text");
+
+      let currentThemeIndex = 0; // 0: DARK, 1: LIGHT, 2: LOW_POWER
+      const themes = ["DARK", "LIGHT", "LOW_POWER"];
+
+      const colors = {
+        dark: {
+          bg: "#000000",
+          hello: "#FF4500",
+          title: "#00BFFF",
+          ok: "#00FF00",
+          status: "#00FF00",
+          dev: "#AAAAAA",
+          line: "#444444",
+          brightness: 1.0,
+        },
+        light: {
+          bg: "#FFFFFF",
+          hello: "#D32F2F",
+          title: "#1976D2",
+          ok: "#388E3C",
+          status: "#388E3C",
+          dev: "#616161",
+          line: "#BDBDBD",
+          brightness: 1.0,
+        },
+        low_power: {
+          bg: "#000000",
+          hello: "#331100",
+          title: "#002244",
+          ok: "#00BF00",
+          status: "#004400",
+          dev: "#222222",
+          line: "#111111",
+          brightness: 0.3, // Simulate 10% brightness by reducing opacity/contrast
+        },
+      };
+
+      function updateUI() {
+        const themeKey = themes[currentThemeIndex]
+          .toLowerCase()
+          .replace("_", "");
+        const theme =
+          currentThemeIndex === 0
+            ? colors.dark
+            : currentThemeIndex === 1
+              ? colors.light
+              : colors.low_power;
+
+        screen.style.backgroundColor = theme.bg;
+        screen.style.filter = `brightness(${theme.brightness})`;
+
+        document.getElementById("hello-label").style.color = theme.hello;
+        document.getElementById("title-label").style.color = theme.title;
+        document.getElementById("ok-icon").style.color = theme.ok;
+        document.getElementById("status-label").style.color = theme.status;
+        document.getElementById("dev-info").style.color = theme.dev;
+        document.getElementById("line").style.backgroundColor = theme.line;
+
+        const currentMode = themes[currentThemeIndex];
+        modeText.textContent = currentMode;
+
+        if (currentMode === "DARK") modeText.style.color = "#00BFFF";
+        else if (currentMode === "LIGHT") modeText.style.color = "#D32F2F";
+        else modeText.style.color = "#555555";
+      }
+
+      screen.addEventListener("click", () => {
+        currentThemeIndex = (currentThemeIndex + 1) % themes.length;
+        updateUI();
+        console.log("Theme changed: " + themes[currentThemeIndex]);
+      });
+
+      // Initial setup
+      updateUI();
+    </script>
+  </body>
+</html>
