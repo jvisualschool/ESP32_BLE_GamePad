@@ -1,7 +1,7 @@
 # 📟 ESP32-S3 3.5" QSPI Smart Display + BLE Gamepad
 
 **Sunton ESP32-S3 3.5인치 QSPI 디스플레이 보드**에서 구동되는 **LVGL 기반 시스템 인터페이스**입니다.  
-AXS15231B 디스플레이 드라이버와 BLE HID 게임패드(ShanWan Q36)를 통합하여, 터치/게임패드 양쪽으로 테마를 전환할 수 있는 데모 프로젝트입니다.
+AXS15231B 디스플레이 드라이버와 **BLE HID**(Bluetooth Low Energy Human Interface Device) 게임패드(ShanWan Q36)를 통합하여, 터치/게임패드 양쪽으로 테마를 전환할 수 있는 데모 프로젝트입니다.
 
 ![Project Screenshot](screenshot/screenshot1_slim.webp)
 
