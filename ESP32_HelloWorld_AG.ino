@@ -27,9 +27,14 @@ static lv_obj_t *status_label;
 static lv_obj_t *dev_info;
 static lv_obj_t *line;
 
-// --- Gamepad Logic Start ---
-/*
-GamepadPtr myGamepads[BP32_MAX_GAMEPADS];
+// --- BLE Gamepad Logic Start ---
+
+static BLEAdvertisedDevice* targetDevice = nullptr;
+static BLEClient* pClient = nullptr;
+static bool doConnect = false;
+static bool connected = false;
+static bool scanning = false;
+static uint32_t lastReconnectAttempt = 0;
 
 // 테마 순환 함수 (터치와 게임패드 공용)
 void toggle_next_theme()
@@ -45,93 +50,183 @@ void toggle_next_theme()
     else if (current_theme == THEME_LIGHT) theme_name = "LIGHT";
     else theme_name = "LOW_POWER";
 
-    Serial.printf("Theme changed: %s\n", theme_name);
+    Serial.printf("[GP] Theme changed: %s\n", theme_name);
 }
 
-void onConnectedGamepad(GamepadPtr gp) {
-    bool foundEmptySlot = false;
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
-        if (myGamepads[i] == nullptr) {
-            Serial.printf("CALLBACK: Gamepad is connected, index=%d\n", i);
-            GamepadProperties properties = gp->getProperties();
-            Serial.printf("Gamepad model: %s, VID=0x%04x, PID=0x%04x\n", 
-                          gp->getModelName().c_str(), properties.vendor_id, properties.product_id);
-            myGamepads[i] = gp;
-            foundEmptySlot = true;
-            break;
-        }
+// 게임패드에서 값이 들어오면 호출됨
+void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    Serial.printf("[GP] Notify [%s] Len:%d Data: ", pBLERemoteCharacteristic->getUUID().toString().c_str(), length);
+    for (int i = 0; i < length; i++) {
+        Serial.printf("%02X ", pData[i]);
     }
-}
+    Serial.println();
 
-void onDisconnectedGamepad(GamepadPtr gp) {
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
-        if (myGamepads[i] == gp) {
-            Serial.printf("CALLBACK: Gamepad is disconnected, index=%d\n", i);
-            myGamepads[i] = nullptr;
-            break;
-        }
-    }
-}
-
-void processGamepad() {
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
-        GamepadPtr gp = myGamepads[i];
-        if (gp && gp->isConnected()) {
-            uint16_t buttons = gp->buttons();
-            if (buttons != 0) { // 어떤 버튼이라도 눌리면 테마 전환
-                static uint32_t last_press_time = 0;
-                if (millis() - last_press_time > 500) { // 500ms 디바운스
-                    Serial.printf("Gamepad Button Pressed: 0x%04x\n", buttons);
-                    toggle_next_theme();
-                    last_press_time = millis();
-                }
+    if (length > 0) {
+        // 빈 입력 무시 (모두 0이거나 idle 상태일 때)
+        bool allZeroOrIdle = true;
+        for (int i = 0; i < length; i++) {
+            if (pData[i] != 0x00 && pData[i] != 0x7F && pData[i] != 0x80) {
+                allZeroOrIdle = false;
+                break;
             }
         }
+        if (allZeroOrIdle) return; // idle 데이터 무시
+
+        // 입력이 들어왔을 때 테마 전환 (디바운스 처리)
+        static uint32_t last_press = 0;
+        if (millis() - last_press > 500) {
+            toggle_next_theme();
+            last_press = millis();
+        }
     }
 }
-*/
-// --- BLE Scanner Logic Start ---
-int scanTime = 5; // In seconds
-BLEScan* pBLEScan;
 
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+class ClientCallbacks : public BLEClientCallbacks {
+    void onConnect(BLEClient* pclient) {
+        Serial.println("[BLE] >>> onConnect callback fired");
+    }
+    void onDisconnect(BLEClient* pclient) {
+        Serial.println("[BLE] >>> onDisconnect callback fired");
+        connected = false;
+        // 재스캔은 loop에서 처리
+    }
+};
+
+class AdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
-        if (advertisedDevice.haveName()) {
-            Serial.printf("Found BLE Device: Name: %s, Address: %s\n", 
-                          advertisedDevice.getName().c_str(), 
-                          advertisedDevice.getAddress().toString().c_str());
+        Serial.printf("[BLE] Scan found: %s (RSSI: %d)\n", 
+            advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "(no name)", 
+            advertisedDevice.getRSSI());
+
+        if(advertisedDevice.haveName() && advertisedDevice.getName() == "ShanWan Q36") {
+            Serial.printf("[BLE] *** TARGET FOUND: %s ***\n", advertisedDevice.getName().c_str());
+            BLEDevice::getScan()->stop();
+            scanning = false;
+            if (targetDevice != nullptr) {
+                delete targetDevice;
+            }
+            targetDevice = new BLEAdvertisedDevice(advertisedDevice);
+            doConnect = true;
         }
     }
 };
 
-void ble_scan_task(void *pvParameters) {
-    while(1) {
-        Serial.println("--- Starting BLE Scan ---");
-        // 스캔 시작 (비동기 스캔이 아닌 동기 스캔 사용: scanTime 초 동안)
-        BLEScanResults* foundDevices = pBLEScan->start(scanTime, false);
-        Serial.printf("--- Scan done! Found %d devices. ---\n", foundDevices->getCount());
-        pBLEScan->clearResults();   // 스캔 결과 메모리 정리
-        vTaskDelay(pdMS_TO_TICKS(2000)); // 2초 대기 후 다시 스캔
+// CCCD(0x2902) Descriptor에 Notification Enable 값을 직접 쓰기
+bool enableCCCD(BLERemoteCharacteristic* pChar) {
+    BLERemoteDescriptor* pDesc = pChar->getDescriptor(BLEUUID((uint16_t)0x2902));
+    if (pDesc != nullptr) {
+        uint8_t notifyOn[] = {0x01, 0x00};
+        pDesc->writeValue(notifyOn, 2, true);
+        Serial.println("[BLE]      CCCD 0x2902 enabled (direct write)");
+        return true;
+    } else {
+        Serial.println("[BLE]      CCCD 0x2902 descriptor not found");
+        return false;
     }
 }
-// --- BLE Scanner Logic End ---
 
-// 터치 이벤트를 위해 복원할 toggle_next_theme 함수
-void toggle_next_theme()
-{
-    if (current_theme == THEME_DARK) current_theme = THEME_LIGHT;
-    else if (current_theme == THEME_LIGHT) current_theme = THEME_LOW_POWER;
-    else current_theme = THEME_DARK;
+void connectToServer() {
+    Serial.println("[BLE] --- connectToServer() start ---");
 
-    update_theme();
+    // 1. Security를 연결 전에 설정 (HID 기기 필수)
+    Serial.println("[BLE] Setting up BLE Security (before connect)...");
+    BLESecurity *pSecurity = new BLESecurity();
+    pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);  // 단순 본딩 (SC 없이)
+    pSecurity->setCapability(ESP_IO_CAP_NONE);           // No I/O capability
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
-    const char* theme_name = "";
-    if (current_theme == THEME_DARK) theme_name = "DARK";
-    else if (current_theme == THEME_LIGHT) theme_name = "LIGHT";
-    else theme_name = "LOW_POWER";
+    // 2. 클라이언트 생성 및 연결
+    pClient = BLEDevice::createClient();
+    pClient->setClientCallbacks(new ClientCallbacks());
+    Serial.printf("[BLE] Connecting to: %s ...\n", targetDevice->getAddress().toString().c_str());
+    
+    if(!pClient->connect(targetDevice)) {
+        Serial.println("[BLE] *** Connection FAILED ***");
+        connected = false;
+        delete pSecurity;
+        return;
+    }
+    
+    connected = true;
+    Serial.println("[BLE] Connection established!");
 
-    Serial.printf("Theme changed: %s\n", theme_name);
+    // 3. 서비스 탐색 전 안정화 딜레이
+    Serial.println("[BLE] Waiting 1s for service discovery...");
+    delay(1000);
+
+    // 4. HID 서비스 탐색
+    Serial.println("[BLE] Looking for HID Service (0x1812)...");
+    BLERemoteService* pSvc = pClient->getService(BLEUUID((uint16_t)0x1812));
+    
+    if(!pSvc) {
+        Serial.println("[BLE] *** HID Service NOT found! Listing all services: ***");
+        auto* svcs = pClient->getServices();
+        if (svcs) {
+            for (auto& pair : *svcs) {
+                Serial.printf("[BLE]   Service: %s\n", pair.second->getUUID().toString().c_str());
+            }
+        }
+        Serial.println("[BLE] Will stay connected and retry...");
+        return;
+    }
+
+    Serial.println("[BLE] Found HID Service! Enumerating characteristics...");
+    int subscribedCount = 0;
+    
+    auto* chars = pSvc->getCharacteristics();
+    if (chars != nullptr) {
+        for(auto &pair : *chars) {
+            BLERemoteCharacteristic* pChar = pair.second;
+            Serial.printf("[BLE]   Char: %s | Notify:%d Read:%d Write:%d\n", 
+                pChar->getUUID().toString().c_str(), 
+                pChar->canNotify(), pChar->canRead(), pChar->canWrite());
+            
+            if(pChar->canNotify()) {
+                // registerForNotify + CCCD 직접 활성화 (이중 보장)
+                pChar->registerForNotify(notifyCallback);
+                delay(100); // 각 구독 사이 안정화
+                enableCCCD(pChar);
+                subscribedCount++;
+                Serial.printf("[BLE]   -> Subscribed (#%d)\n", subscribedCount);
+            }
+        }
+    }
+    
+    Serial.printf("[BLE] --- Setup complete! Subscribed to %d report(s) ---\n", subscribedCount);
+    if (subscribedCount == 0) {
+        Serial.println("[BLE] WARNING: No notifiable characteristics found!");
+    }
 }
+
+void startBLEScan() {
+    if (scanning) return;
+    Serial.println("[BLE] Starting scan...");
+    scanning = true;
+    BLEScan* pScan = BLEDevice::getScan();
+    pScan->clearResults();
+    pScan->start(10, false); // 10초간 스캔
+}
+
+void processGamepad() {
+    // 연결 요청 처리
+    if (doConnect) {
+        doConnect = false;
+        connectToServer();
+        return;
+    }
+    
+    // 연결 끊어졌으면 주기적 재스캔 (5초마다)
+    if (!connected && !doConnect && !scanning) {
+        if (millis() - lastReconnectAttempt > 5000) {
+            lastReconnectAttempt = millis();
+            Serial.println("[BLE] Not connected. Re-scanning...");
+            startBLEScan();
+        }
+    }
+}
+// --- BLE Gamepad Logic End ---
+
 
 // 트랜지션 설정 (애니메이션 효과)
 static lv_style_transition_dsc_t trans_dsc;
@@ -207,20 +302,16 @@ void setup()
     bsp_display_start_with_config(&cfg);
     bsp_display_backlight_on();
 
-    Serial.println("Initialize BLE Scanner");
+    Serial.println("Initialize Standard BLE Scanner");
     BLEDevice::init("");
-    pBLEScan = BLEDevice::getScan(); //create new scan
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
-    pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);  // less or equal setInterval value
-
-    // BLE 스캐닝을 위한 백그라운드 태스크 생성 (우선순위 1)
-    xTaskCreate(ble_scan_task, "ble_scan_task", 4096, NULL, 1, NULL);
-
-    // Serial.println("Initialize Bluepad32");
-    // BP32.setup(&onConnectedGamepad, &onDisconnectedGamepad);
-    // BP32.forgetBluetoothKeys(); // 기존 페어링을 초기화하고 싶을 때 주석 해제
+    
+    BLEScan* pScan = BLEDevice::getScan();
+    pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+    pScan->setInterval(45);
+    pScan->setWindow(15);
+    pScan->setActiveScan(true);
+    // 비동기 스캔 모드: 콜백만 등록하고 태스크를 블로킹하지 않음 (nullptr 전달)
+    pScan->start(0, nullptr, false);
 
     Serial.println("Create Commemoration UI");
     bsp_display_lock(0);
@@ -288,8 +379,7 @@ void setup()
 
 void loop()
 {
-    // BP32.update();
-    // processGamepad();
+    processGamepad();
 
     // 부드러운 백라이트 전환 처리 (10ms 마다 1%씩 목표치로 이동)
     if (current_brightness != target_brightness) {
