@@ -1,5 +1,5 @@
 /* ============================================================================
- *  ESP32-S3 QSPI Smart Display + BLE Gamepad  v1.0
+ *  ESP32-S3 QSPI Smart Display + BLE Gamepad  v1.01
  *  4-page LVGL UI: Welcome / Hardware / Software / Monitor
  *
  *  Hardware  : ESP32-S3, 3.5" QSPI TFT (AXS15231B, 320×480), I2C Touch
@@ -254,8 +254,11 @@ void notifyCallback(BLERemoteCharacteristic *pChar, uint8_t *pData,
     static uint8_t prev_btns_log = 0;
     bool btns_changed = (cur_btns != prev_btns_log);
 
+    static uint8_t prev_hat_log = HAT_NEUTRAL;
+    bool hat_changed = (cur_hat != prev_hat_log);
+
     // Idle guard — discard joystick-at-center spam when nothing is happening
-    if (!btns_changed) {
+    if (!btns_changed && !hat_changed) {
         bool idle = true;
         if (pData[GP_LX_IDX] != 0x7F && pData[GP_LX_IDX] != 0x80) idle = false;
         else if (pData[GP_LY_IDX] != 0x7F && pData[GP_LY_IDX] != 0x80) idle = false;
@@ -276,8 +279,7 @@ void notifyCallback(BLERemoteCharacteristic *pChar, uint8_t *pData,
         prev_btns_log = cur_btns;
     }
 
-    static uint8_t prev_hat_log = HAT_NEUTRAL;
-    if (cur_hat != prev_hat_log) {
+    if (hat_changed) {
         static const char *hat_name[] = {
             "---","N","NE","E","SE","S","SW","W","NW"
         };
@@ -650,7 +652,7 @@ static void create_software_screen() {
         { LV_SYMBOL_IMAGE  "  LVGL",       "v8.3.9"                            },
         { LV_SYMBOL_WIFI   "  BLE",        "HID Central  IINE L1161 (Xbox)"   },
         { LV_SYMBOL_CHARGE "  PARTITION",  "app 3MB / FAT 9MB / total 16MB"   },
-        { LV_SYMBOL_OK     "  STATUS",     "RUNNING  v1.0"                     },
+        { LV_SYMBOL_OK     "  STATUS",     "RUNNING  v1.01"                    },
     };
 
     int y = 56;
@@ -780,7 +782,7 @@ static void update_welcome_ble_label(bool is_connected) {
 void setup() {
     Serial.begin(115200);
     delay(800);
-    Serial.println("\n=== ESP32-S3 QSPI BLE GamePad v1.0 ===");
+    Serial.println("\n=== ESP32-S3 QSPI BLE GamePad v1.01 ===");
 
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
