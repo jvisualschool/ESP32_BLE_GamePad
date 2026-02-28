@@ -54,7 +54,7 @@ ESP32_HelloWorld_AG.ino   ← Application: UI + BLE gamepad logic
 - **BLE callbacks run in the BLE task context** — never call LVGL APIs from `notifyCallback` or `onDisconnect`. Use volatile flags/structs to pass data to the main loop.
 - `processGamepad()` is called from `loop()` and handles the BLE state machine (connect, auto-rescan every 5 s).
 
-### BLE HID Client (ShanWan Q36)
+### BLE HID Client (IINE L1161)
 
 - ESP32-S3 acts as **BLE Central**; gamepad is Peripheral with HID Service UUID `0x1812`.
 - **Security must be set before** `pClient->connect()` — use `ESP_LE_AUTH_BOND` (not SC).
