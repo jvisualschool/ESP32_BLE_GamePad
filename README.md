@@ -3,7 +3,7 @@
 ESP32-S3 + 3.5" QSPI 디스플레이 + BLE HID 게임패드 통합 프로젝트.
 LVGL 4페이지 UI를 BLE 게임패드 버튼과 터치 제스처로 조작합니다.
 
-![screenshot](screenshot/screenshot.JPG)
+![screenshot](https://raw.githubusercontent.com/jvisualschool/ESP32_BLE_GamePad/master/screenshot/screenshot.JPG)
 
 ---
 
